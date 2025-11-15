@@ -6,6 +6,7 @@ from PySide6.QtWidgets import QApplication, QMainWindow, QToolBar, QWidget, QVBo
     QColorDialog, QSpinBox, QFormLayout, QFrame, QMessageBox, QGraphicsView, QGraphicsScene, QGraphicsRectItem, \
     QGraphicsEllipseItem, QGraphicsLineItem, QFileDialog
 
+from task_png import Image, ImageRectangle
 
 DEFAULT_FILL = QColor(200, 200, 255)
 DEFAULT_STROKE = QColor(30, 30, 30)
@@ -239,30 +240,47 @@ class MainWindow(QMainWindow):
         file_menu = menu.addMenu("File")
 
         act_export_png = QAction("Export PNG", self)
-        act_export_png.triggered.connect(self.export_png_stub)
+        act_export_png.triggered.connect(self.export_png)
         file_menu.addAction(act_export_png)
 
         act_export_svg = QAction("Export SVG", self)
-        act_export_svg.triggered.connect(self.export_svg_stub)
+        act_export_svg.triggered.connect(self.export_svg)
         file_menu.addAction(act_export_svg)
 
         file_menu.addSeparator()
 
         act_load_svg = QAction("Load from SVG", self)
-        act_load_svg.triggered.connect(self.load_svg_stub)
+        act_load_svg.triggered.connect(self.load_svg)
         file_menu.addAction(act_load_svg)
 
-    def export_png_stub(self):
+    def export_png(self):
         path, _ = QFileDialog.getSaveFileName(self, "Export PNG", "", "PNG Files (*.png)")
-        if path:
-            QMessageBox.information(self, "Stub", f"PNG export not implemented.\nWould save to:\n{path}")
+        if not path:
+            return
 
-    def export_svg_stub(self):
+        img = Image(int(self.scene.width()), int(self.scene.height()))
+        for obj in self.scene.items():
+            if isinstance(obj, QGraphicsRectItem):
+                r = obj.rect()
+                outer_color = obj.pen().color()
+                inner_color = obj.brush().color()
+                img.add_object(ImageRectangle(
+                    int(obj.x()), int(obj.y()), int(r.width()), int(r.height()),
+                    (outer_color.red(), outer_color.green(), outer_color.blue()),
+                    (inner_color.red(), inner_color.green(), inner_color.blue()),
+                    obj.pen().width(), int(obj.rotation()),
+                ))
+
+        img.render(path)
+
+        QMessageBox.information(self, "Stub", f"PNG export completed.\nSaved to:\n{path}")
+
+    def export_svg(self):
         path, _ = QFileDialog.getSaveFileName(self, "Export SVG", "", "SVG Files (*.svg)")
         if path:
             QMessageBox.information(self, "Stub", f"SVG export not implemented.\nWould save to:\n{path}")
 
-    def load_svg_stub(self):
+    def load_svg(self):
         path, _ = QFileDialog.getOpenFileName(self, "Load SVG", "", "SVG Files (*.svg)")
         if path:
             QMessageBox.information(self, "Stub", f"SVG loading not implemented.\nWould load:\n{path}")
