@@ -6,7 +6,7 @@ from PySide6.QtWidgets import QApplication, QMainWindow, QToolBar, QWidget, QVBo
     QColorDialog, QSpinBox, QFormLayout, QFrame, QMessageBox, QGraphicsView, QGraphicsScene, QGraphicsRectItem, \
     QGraphicsEllipseItem, QGraphicsLineItem, QFileDialog
 
-from task_png import Image, ImageRectangle
+from task_png import Image, ImageRectangle, ImageEllipse, ImageLine
 
 DEFAULT_FILL = QColor(200, 200, 255)
 DEFAULT_STROKE = QColor(30, 30, 30)
@@ -269,6 +269,24 @@ class MainWindow(QMainWindow):
                     (outer_color.red(), outer_color.green(), outer_color.blue()),
                     (inner_color.red(), inner_color.green(), inner_color.blue()),
                     obj.pen().width(), int(obj.rotation()),
+                ))
+            elif isinstance(obj, QGraphicsEllipseItem):
+                r = obj.rect()
+                outer_color = obj.pen().color()
+                inner_color = obj.brush().color()
+                img.add_object(ImageEllipse(
+                    int(obj.x()), int(obj.y()), int(r.width()), int(r.height()),
+                    (outer_color.red(), outer_color.green(), outer_color.blue()),
+                    (inner_color.red(), inner_color.green(), inner_color.blue()),
+                    obj.pen().width(), int(obj.rotation()),
+                ))
+            elif isinstance(obj, QGraphicsLineItem):
+                l = obj.line()
+                outer_color = obj.pen().color()
+                img.add_object(ImageLine(
+                    int(obj.x()), int(obj.y()), int(l.x2()), int(l.y2()),
+                    (outer_color.red(), outer_color.green(), outer_color.blue()),
+                    obj.pen().width(),
                 ))
 
         img.render(path)
