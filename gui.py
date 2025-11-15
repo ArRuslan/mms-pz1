@@ -1,0 +1,361 @@
+import sys
+
+from PySide6.QtCore import Qt, QEvent
+from PySide6.QtGui import QPainter, QPen, QBrush, QColor, QActionGroup, QAction, QSinglePointEvent
+from PySide6.QtWidgets import QApplication, QMainWindow, QToolBar, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, \
+    QColorDialog, QSpinBox, QFormLayout, QFrame, QMessageBox, QGraphicsView, QGraphicsScene, QGraphicsRectItem, \
+    QGraphicsEllipseItem, QGraphicsLineItem, QFileDialog
+
+
+DEFAULT_FILL = QColor(200, 200, 255)
+DEFAULT_STROKE = QColor(30, 30, 30)
+DEFAULT_STROKE_WIDTH = 2
+
+
+class CanvasView(QGraphicsView):
+    def __init__(self, scene, parent=None):
+        super().__init__(scene, parent)
+        self.setRenderHints(QPainter.RenderHint.Antialiasing)
+        self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
+        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.SmartViewportUpdate)
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+
+
+class ShapeFactory:
+    @staticmethod
+    def rect(
+            x: int = 10, y: int = 10, w: int = 100, h: int = 70, fill: QColor = DEFAULT_FILL,
+            stroke: QColor = DEFAULT_STROKE, sw: int = DEFAULT_STROKE_WIDTH,
+    ) -> QGraphicsRectItem:
+        r = QGraphicsRectItem(0, 0, w, h)
+        r.setBrush(QBrush(fill))
+        p = QPen(stroke)
+        p.setWidth(sw)
+        r.setPen(p)
+        r.setPos(x, y)
+        r.setFlags(
+            QGraphicsRectItem.GraphicsItemFlag.ItemIsSelectable |
+            QGraphicsRectItem.GraphicsItemFlag.ItemIsMovable |
+            QGraphicsRectItem.GraphicsItemFlag.ItemSendsGeometryChanges
+        )
+        return r
+
+    @staticmethod
+    def ellipse(
+            x: int = 10, y: int = 10, w: int = 100, h: int = 70, fill: QColor = DEFAULT_FILL,
+            stroke: QColor = DEFAULT_STROKE, sw: int = DEFAULT_STROKE_WIDTH,
+    ) -> QGraphicsEllipseItem:
+        e = QGraphicsEllipseItem(0, 0, w, h)
+        e.setBrush(QBrush(fill))
+        p = QPen(stroke)
+        p.setWidth(sw)
+        e.setPen(p)
+        e.setPos(x, y)
+        e.setFlags(
+            QGraphicsEllipseItem.GraphicsItemFlag.ItemIsSelectable |
+            QGraphicsEllipseItem.GraphicsItemFlag.ItemIsMovable |
+            QGraphicsEllipseItem.GraphicsItemFlag.ItemSendsGeometryChanges
+        )
+        return e
+
+    @staticmethod
+    def line(
+            x1: int = 10, y1: int = 10, x2: int = 150, y2: int = 10, stroke: QColor = DEFAULT_STROKE,
+            sw: int = DEFAULT_STROKE_WIDTH,
+    ) -> QGraphicsLineItem:
+        dx = x2 - x1
+        dy = y2 - y1
+        l = QGraphicsLineItem(0, 0, dx, dy)
+        p = QPen(stroke)
+        p.setWidth(sw)
+        l.setPen(p)
+        l.setPos(x1, y1)
+        l.setFlags(
+            QGraphicsLineItem.GraphicsItemFlag.ItemIsSelectable |
+            QGraphicsLineItem.GraphicsItemFlag.ItemIsMovable |
+            QGraphicsLineItem.GraphicsItemFlag.ItemSendsGeometryChanges
+        )
+        return l
+
+
+class PropertyEditor(QWidget):
+    def __init__(self):
+        super().__init__()
+        self._item = None
+        self._lock = False
+
+        layout = QFormLayout(self)
+
+        self.spin_x = QSpinBox()
+        self.spin_x.setRange(-10000, 10000)
+        self.spin_x.valueChanged.connect(self._on_position_changed)
+        layout.addRow("X:", self.spin_x)
+
+        self.spin_y = QSpinBox()
+        self.spin_y.setRange(-10000, 10000)
+        self.spin_y.valueChanged.connect(self._on_position_changed)
+        layout.addRow("Y:", self.spin_y)
+
+        self.spin_w = QSpinBox()
+        self.spin_w.setRange(1, 10000)
+        self.spin_w.valueChanged.connect(self._on_size_changed)
+        layout.addRow("Width:", self.spin_w)
+
+        self.spin_h = QSpinBox()
+        self.spin_h.setRange(1, 10000)
+        self.spin_h.valueChanged.connect(self._on_size_changed)
+        layout.addRow("Height:", self.spin_h)
+
+        self.spin_rot = QSpinBox()
+        self.spin_rot.setRange(-360, 360)
+        self.spin_rot.valueChanged.connect(self._on_rotation_changed)
+        layout.addRow("Rotation:", self.spin_rot)
+
+        self.spin_sw = QSpinBox()
+        self.spin_sw.setRange(0, 50)
+        self.spin_sw.valueChanged.connect(self._on_stroke_changed)
+        layout.addRow("Stroke Width:", self.spin_sw)
+
+        self.btn_fill = QPushButton("Fill Color")
+        self.btn_fill.clicked.connect(self._choose_fill)
+        layout.addRow("Fill:", self.btn_fill)
+
+        self.btn_stroke = QPushButton("Stroke Color")
+        self.btn_stroke.clicked.connect(self._choose_stroke)
+        layout.addRow("Stroke:", self.btn_stroke)
+
+    def set_item(self, item):
+        self._item = item
+        self._update_ui()
+
+    def _update_ui(self):
+        self._lock = True
+
+        if self._item is None:
+            for w in self.findChildren(QWidget):
+                w.setEnabled(False)
+            self._lock = False
+            return
+
+        for w in self.findChildren(QWidget):
+            w.setEnabled(True)
+
+        pos = self._item.pos()
+        self.spin_x.setValue(int(pos.x()))
+        self.spin_y.setValue(int(pos.y()))
+        self.spin_rot.setValue(int(self._item.rotation()))
+
+        if hasattr(self._item, "pen"):
+            self.spin_sw.setValue(self._item.pen().width())
+
+        if isinstance(self._item, (QGraphicsRectItem, QGraphicsEllipseItem)):
+            r = self._item.rect()
+            self.spin_w.setValue(int(r.width()))
+            self.spin_h.setValue(int(r.height()))
+            self.spin_h.setEnabled(True)
+        elif isinstance(self._item, QGraphicsLineItem):
+            line = self._item.line()
+            length = int((line.dx()**2 + line.dy()**2) ** 0.5)
+            self.spin_w.setValue(length)
+            self.spin_h.setValue(0)
+            self.spin_h.setEnabled(False)
+
+        self._lock = False
+
+    def _on_position_changed(self):
+        if self._lock or self._item is None: return
+        self._item.setPos(self.spin_x.value(), self.spin_y.value())
+
+    def _on_size_changed(self):
+        if self._lock or self._item is None: return
+        w, h = self.spin_w.value(), self.spin_h.value()
+
+        if isinstance(self._item, (QGraphicsRectItem, QGraphicsEllipseItem)):
+            self._item.setRect(0, 0, w, h)
+        elif isinstance(self._item, QGraphicsLineItem):
+            self._item.setLine(0, 0, w, 0)
+
+    def _on_rotation_changed(self):
+        if self._lock or self._item is None: return
+        self._item.setRotation(self.spin_rot.value())
+
+    def _on_stroke_changed(self):
+        if self._lock or self._item is None: return
+        pen = self._item.pen()
+        pen.setWidth(self.spin_sw.value())
+        self._item.setPen(pen)
+
+    def _choose_fill(self):
+        if self._item is None: return
+        col = QColorDialog.getColor(DEFAULT_FILL, self, "Choose Fill")
+        if col.isValid():
+            if hasattr(self._item, "setBrush"):
+                self._item.setBrush(QBrush(col))
+
+    def _choose_stroke(self):
+        if self._item is None: return
+        col = QColorDialog.getColor(DEFAULT_STROKE, self, "Choose Stroke")
+        if col.isValid():
+            pen = self._item.pen()
+            pen.setColor(col)
+            self._item.setPen(pen)
+
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Pz1")
+        self.resize(1100, 700)
+
+        self.scene = QGraphicsScene(0, 0, 800, 600)
+        self.view = CanvasView(self.scene)
+
+        self.prop = PropertyEditor()
+
+        container = QWidget()
+        layout = QHBoxLayout(container)
+        layout.addWidget(self.view, 1)
+
+        side = QFrame()
+        side.setFrameShape(QFrame.Shape.StyledPanel)
+        side_lay = QVBoxLayout(side)
+        side_lay.addWidget(self.prop)
+        layout.addWidget(side, 0)
+
+        self.setCentralWidget(container)
+
+        self._create_toolbar()
+        self._create_menu()
+        self._create_actions()
+
+        self.current_tool = None
+        self.scene.selectionChanged.connect(self._on_selection)
+
+        self.view.viewport().installEventFilter(self)
+
+    def _create_menu(self):
+        menu = self.menuBar()
+
+        file_menu = menu.addMenu("File")
+
+        act_export_png = QAction("Export PNG", self)
+        act_export_png.triggered.connect(self.export_png_stub)
+        file_menu.addAction(act_export_png)
+
+        act_export_svg = QAction("Export SVG", self)
+        act_export_svg.triggered.connect(self.export_svg_stub)
+        file_menu.addAction(act_export_svg)
+
+        file_menu.addSeparator()
+
+        act_load_svg = QAction("Load from SVG", self)
+        act_load_svg.triggered.connect(self.load_svg_stub)
+        file_menu.addAction(act_load_svg)
+
+    def export_png_stub(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Export PNG", "", "PNG Files (*.png)")
+        if path:
+            QMessageBox.information(self, "Stub", f"PNG export not implemented.\nWould save to:\n{path}")
+
+    def export_svg_stub(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Export SVG", "", "SVG Files (*.svg)")
+        if path:
+            QMessageBox.information(self, "Stub", f"SVG export not implemented.\nWould save to:\n{path}")
+
+    def load_svg_stub(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Load SVG", "", "SVG Files (*.svg)")
+        if path:
+            QMessageBox.information(self, "Stub", f"SVG loading not implemented.\nWould load:\n{path}")
+
+    def _create_toolbar(self):
+        tb = QToolBar("Tools")
+        self.addToolBar(tb)
+
+        group = QActionGroup(self)
+        group.setExclusive(True)
+
+        act_select = QAction("Select", self, checkable=True)
+        act_select.setChecked(True)
+        act_select.triggered.connect(lambda: self._set_tool(None))
+        group.addAction(act_select)
+        tb.addAction(act_select)
+
+        act_rect = QAction("Rect", self, checkable=True)
+        act_rect.triggered.connect(lambda: self._set_tool("rect"))
+        group.addAction(act_rect)
+        tb.addAction(act_rect)
+
+        act_ellipse = QAction("Ellipse", self, checkable=True)
+        act_ellipse.triggered.connect(lambda: self._set_tool("ellipse"))
+        group.addAction(act_ellipse)
+        tb.addAction(act_ellipse)
+
+        act_line = QAction("Line", self, checkable=True)
+        act_line.triggered.connect(lambda: self._set_tool("line"))
+        group.addAction(act_line)
+        tb.addAction(act_line)
+
+        tb.addSeparator()
+
+        act_delete = QAction("Delete", self)
+        act_delete.triggered.connect(self.delete_selected)
+        tb.addAction(act_delete)
+
+    def _create_actions(self):
+        act_delete = QAction(self)
+        act_delete.setShortcut(Qt.Key.Key_Delete)
+        act_delete.triggered.connect(self.delete_selected)
+        self.addAction(act_delete)
+
+    def _set_tool(self, tool):
+        self.current_tool = tool
+        if tool is None:
+            self.view.setCursor(Qt.CursorShape.ArrowCursor)
+        else:
+            self.view.setCursor(Qt.CursorShape.CrossCursor)
+
+    def eventFilter(self, obj, event: QSinglePointEvent):
+        if obj is self.view.viewport():
+            if event.type() == QEvent.Type.MouseButtonPress and \
+                    event.button() == Qt.MouseButton.LeftButton and self.current_tool:
+                pos = self.view.mapToScene(event.position().toPoint())
+                self._add_shape_at(pos)
+                return True
+        return super().eventFilter(obj, event)
+
+    def _add_shape_at(self, pos):
+        x, y = int(pos.x()), int(pos.y())
+        if self.current_tool == "rect":
+            item = ShapeFactory.rect(x, y, 120, 80)
+        elif self.current_tool == "ellipse":
+            item = ShapeFactory.ellipse(x, y, 120, 80)
+        elif self.current_tool == "line":
+            item = ShapeFactory.line(x, y, x + 120, y)
+        else:
+            return
+        self.scene.addItem(item)
+        self.scene.clearSelection()
+        item.setSelected(True)
+
+    def _on_selection(self):
+        sel = self.scene.selectedItems()
+        if sel:
+            self.prop.set_item(sel[0])
+        else:
+            self.prop.set_item(None)
+
+    def delete_selected(self):
+        for item in self.scene.selectedItems():
+            self.scene.removeItem(item)
+        self.prop.set_item(None)
+
+
+def main():
+    app = QApplication(sys.argv)
+    w = MainWindow()
+    w.show()
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()

@@ -6,8 +6,9 @@ authors = ["RuslanUC <dev_ruslan_uc@protonmail.com>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.11"
+python = "^3.11,<3.14"
 matplotlib = "^3.10.7"
+pyside6 = "^6.10.0"
 
 
 [build-system]
