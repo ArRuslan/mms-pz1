@@ -1,8 +1,8 @@
 import sys
 
-from PyQt5.QtCore import QPointF
-from PySide6.QtCore import Qt, QEvent, QObject
-from PySide6.QtGui import QPainter, QPen, QBrush, QColor, QActionGroup, QAction, QSinglePointEvent, QImage
+from PySide6.QtCore import Qt, QEvent, QObject, QPointF
+from PySide6.QtGui import QPainter, QPen, QBrush, QColor, QActionGroup, QAction, QSinglePointEvent, QImage, \
+    QColorConstants
 from PySide6.QtWidgets import QApplication, QMainWindow, QToolBar, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, \
     QColorDialog, QSpinBox, QFormLayout, QFrame, QMessageBox, QGraphicsView, QGraphicsScene, QGraphicsRectItem, \
     QGraphicsEllipseItem, QGraphicsLineItem, QFileDialog, QGraphicsItem
@@ -129,6 +129,9 @@ class PropertyEditor(QWidget):
     def set_item(self, item: QGraphicsItem | None) -> None:
         self._item = item
         self._update_ui()
+
+    def get_item(self) -> QGraphicsItem | None:
+        return self._item
 
     def _update_ui(self) -> None:
         self._lock = True
@@ -266,40 +269,23 @@ class MainWindow(QMainWindow):
             return
 
         img = Image(int(self.scene.width()), int(self.scene.height()))
-        #for obj in self.scene.items():
-        #    if isinstance(obj, QGraphicsRectItem):
-        #        r = obj.rect()
-        #        outer_color = obj.pen().color()
-        #        inner_color = obj.brush().color()
-        #        img.add_object(ImageRectangle(
-        #            int(obj.x()), int(obj.y()), int(r.width()), int(r.height()),
-        #            (outer_color.red(), outer_color.green(), outer_color.blue()),
-        #            (inner_color.red(), inner_color.green(), inner_color.blue()),
-        #            obj.pen().width(), int(obj.rotation()),
-        #        ))
-        #    elif isinstance(obj, QGraphicsEllipseItem):
-        #        r = obj.rect()
-        #        outer_color = obj.pen().color()
-        #        inner_color = obj.brush().color()
-        #        img.add_object(ImageEllipse(
-        #            int(obj.x()), int(obj.y()), int(r.width()), int(r.height()),
-        #            (outer_color.red(), outer_color.green(), outer_color.blue()),
-        #            (inner_color.red(), inner_color.green(), inner_color.blue()),
-        #            obj.pen().width(), int(obj.rotation()),
-        #        ))
-        #    elif isinstance(obj, QGraphicsLineItem):
-        #        l = obj.line()
-        #        outer_color = obj.pen().color()
-        #        img.add_object(ImageLine(
-        #            int(obj.x()), int(obj.y()), int(l.x2()), int(l.y2()),
-        #            (outer_color.red(), outer_color.green(), outer_color.blue()),
-        #            obj.pen().width(),
-        #        ))
-        #img.render(path)
 
         pixmap = QImage(int(self.scene.width()), int(self.scene.height()), QImage.Format.Format_RGB888)
+        pixmap.fill(QColorConstants.White)
         painter = QPainter(pixmap)
+
+        old_sel = self.scene.selectedItems()
+        self.scene.clearSelection()
+        old_item = self.prop.get_item()
+        self.prop.set_item(None)
+
         self.scene.render(painter)
+
+        for item in old_sel:
+            item.setSelected(True)
+        self.prop.set_item(old_item)
+
+        painter.end()
 
         pixels = [
             [Pixel(*img.bg_color) for _ in range(img.width)]
@@ -313,17 +299,17 @@ class MainWindow(QMainWindow):
 
         write_png(path, pixels)
 
-        QMessageBox.information(self, "Stub", f"PNG export completed.\nSaved to:\n{path}")
+        QMessageBox.information(self, "Export - PNG", f"PNG export completed.\nSaved to:\n{path}")
 
     def export_svg(self) -> None:
         path, _ = QFileDialog.getSaveFileName(self, "Export SVG", "", "SVG Files (*.svg)")
         if path:
-            QMessageBox.information(self, "Stub", f"SVG export not implemented.\nWould save to:\n{path}")
+            QMessageBox.information(self, "Export - SVG", f"SVG export not implemented.\nWould save to:\n{path}")
 
     def load_svg(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Load SVG", "", "SVG Files (*.svg)")
         if path:
-            QMessageBox.information(self, "Stub", f"SVG loading not implemented.\nWould load:\n{path}")
+            QMessageBox.information(self, "Import - SVG", f"SVG loading not implemented.\nWould load:\n{path}")
 
     def _create_toolbar(self) -> None:
         tb = QToolBar("Tools")
