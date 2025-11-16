@@ -1,3 +1,4 @@
+import signal
 import sys
 
 from PySide6.QtCore import Qt, QEvent, QObject, QPointF
@@ -503,6 +504,8 @@ class MainWindow(QMainWindow):
 
 
 def main() -> None:
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+
     app = QApplication(sys.argv)
     w = MainWindow()
     w.show()
