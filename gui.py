@@ -2,10 +2,10 @@ import sys
 
 from PySide6.QtCore import Qt, QEvent, QObject, QPointF
 from PySide6.QtGui import QPainter, QPen, QBrush, QColor, QActionGroup, QAction, QSinglePointEvent, QImage, \
-    QColorConstants
+    QColorConstants, QPixmap
 from PySide6.QtWidgets import QApplication, QMainWindow, QToolBar, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, \
     QColorDialog, QSpinBox, QFormLayout, QFrame, QMessageBox, QGraphicsView, QGraphicsScene, QGraphicsRectItem, \
-    QGraphicsEllipseItem, QGraphicsLineItem, QFileDialog, QGraphicsItem
+    QGraphicsEllipseItem, QGraphicsLineItem, QFileDialog, QGraphicsItem, QLabel, QDialog, QSlider
 
 from task_png import Image, Pixel, write_png
 
@@ -126,6 +126,24 @@ class PropertyEditor(QWidget):
         self.btn_stroke.clicked.connect(self._choose_stroke)
         layout.addRow("Stroke:", self.btn_stroke)
 
+        self.sat_slider = QSlider()
+        self.sat_slider.setOrientation(Qt.Orientation.Horizontal)
+        self.sat_slider.setMinimum(0)
+        self.sat_slider.setMaximum(255)
+        self.sat_slider.setValue(0)
+        self.sat_slider.setSingleStep(1)
+        self.sat_slider.valueChanged.connect(self._on_sat_changed)
+        layout.addRow("Sat:", self.sat_slider)
+
+        self.lum_slider = QSlider()
+        self.lum_slider.setOrientation(Qt.Orientation.Horizontal)
+        self.lum_slider.setMinimum(0)
+        self.lum_slider.setMaximum(255)
+        self.lum_slider.setValue(0)
+        self.lum_slider.setSingleStep(1)
+        self.lum_slider.valueChanged.connect(self._on_lum_changed)
+        layout.addRow("Lum:", self.lum_slider)
+
     def set_item(self, item: QGraphicsItem | None) -> None:
         self._item = item
         self._update_ui()
@@ -164,6 +182,15 @@ class PropertyEditor(QWidget):
             self.spin_w.setValue(length)
             self.spin_h.setValue(0)
             self.spin_h.setEnabled(False)
+
+        if isinstance(self._item, (QGraphicsRectItem, QGraphicsEllipseItem)):
+            h, s, l, *_ = self._item.brush().color().getHsl()
+            self.sat_slider.setValue(s)
+            self.lum_slider.setValue(l)
+        elif isinstance(self._item, QGraphicsLineItem):
+            h, s, l, *_ = self._item.pen().color().getHsl()
+            self.sat_slider.setValue(s)
+            self.lum_slider.setValue(l)
 
         self._lock = False
 
@@ -210,6 +237,70 @@ class PropertyEditor(QWidget):
             pen = self._item.pen()
             pen.setColor(col)
             self._item.setPen(pen)
+
+    def _on_sat_changed(self) -> None:
+        if self._lock or self._item is None:
+            return
+
+        if isinstance(self._item, (QGraphicsRectItem, QGraphicsEllipseItem)):
+            h, _, l, *_ = self._item.brush().color().getHsl()
+            new_color = QColor.fromHsl(h, self.sat_slider.value(), l)
+            self._item.setBrush(QBrush(new_color))
+        elif isinstance(self._item, QGraphicsLineItem):
+            h, _, l, *_ = self._item.pen().color().getHsl()
+            new_color = QColor.fromHsl(h, self.sat_slider.value(), l)
+            self._item.setPen(QPen(new_color))
+
+    def _on_lum_changed(self) -> None:
+        if self._lock or self._item is None:
+            return
+
+        if isinstance(self._item, (QGraphicsRectItem, QGraphicsEllipseItem)):
+            h, s, _, *_ = self._item.brush().color().getHsl()
+            new_color = QColor.fromHsl(h, s, self.lum_slider.value())
+            self._item.setBrush(QBrush(new_color))
+        elif isinstance(self._item, QGraphicsLineItem):
+            h, s, _, *_ = self._item.pen().color().getHsl()
+            new_color = QColor.fromHsl(h, s, self.lum_slider.value())
+            self._item.setPen(QPen(new_color))
+
+
+class HSLCompareWidget(QDialog):
+    def __init__(self, parent: QObject | None=None) -> None:
+        super().__init__(parent)
+
+        self.originalLabel = QLabel()
+        self.hslLabel = QLabel()
+
+        self.originalLabel.setScaledContents(True)
+        self.hslLabel.setScaledContents(True)
+
+        layout = QHBoxLayout()
+        layout.addWidget(self.originalLabel)
+        layout.addWidget(self.hslLabel)
+        self.setLayout(layout)
+
+    def setImage(self, img: QImage) -> None:
+        if img.isNull():
+            return
+
+        self.originalLabel.setPixmap(QPixmap.fromImage(img))
+
+        hsl_img = self.convertToHSLPreview(img)
+        self.hslLabel.setPixmap(QPixmap.fromImage(hsl_img))
+
+    @staticmethod
+    def convertToHSLPreview(img: QImage) -> QImage:
+        w, h = img.width(), img.height()
+        preview = QImage(w, h, QImage.Format.Format_RGB888)
+
+        for y in range(h):
+            for x in range(w):
+                rgbColor = img.pixelColor(x, y)
+                previewColor = rgbColor.toHsl()
+                preview.setPixelColor(x, y, previewColor)
+
+        return preview
 
 
 class MainWindow(QMainWindow):
@@ -259,20 +350,20 @@ class MainWindow(QMainWindow):
 
         file_menu.addSeparator()
 
-        act_load_svg = QAction("Load from SVG", self)
-        act_load_svg.triggered.connect(self.load_svg)
-        file_menu.addAction(act_load_svg)
+        act_compare_cmyk = QAction("Load from SVG", self)
+        act_compare_cmyk.triggered.connect(self.load_svg)
+        file_menu.addAction(act_compare_cmyk)
 
-    def export_png(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(self, "Export PNG", "", "PNG Files (*.png)")
-        if not path:
-            return
+        file_menu.addSeparator()
 
-        img = Image(int(self.scene.width()), int(self.scene.height()))
+        act_compare_cmyk = QAction("Compare RBG and HSL", self)
+        act_compare_cmyk.triggered.connect(self.compare_cmyk)
+        file_menu.addAction(act_compare_cmyk)
 
-        pixmap = QImage(int(self.scene.width()), int(self.scene.height()), QImage.Format.Format_RGB888)
-        pixmap.fill(QColorConstants.White)
-        painter = QPainter(pixmap)
+    def _render(self) -> QImage:
+        image = QImage(int(self.scene.width()), int(self.scene.height()), QImage.Format.Format_RGB888)
+        image.fill(QColorConstants.White)
+        painter = QPainter(image)
 
         old_sel = self.scene.selectedItems()
         self.scene.clearSelection()
@@ -285,6 +376,17 @@ class MainWindow(QMainWindow):
             self.prop.set_item(item)
 
         painter.end()
+
+        return image
+
+    def export_png(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(self, "Export PNG", "", "PNG Files (*.png)")
+        if not path:
+            return
+
+        img = Image(int(self.scene.width()), int(self.scene.height()))
+
+        pixmap = self._render()
 
         pixels = [
             [Pixel(*img.bg_color) for _ in range(img.width)]
@@ -309,6 +411,13 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(self, "Load SVG", "", "SVG Files (*.svg)")
         if path:
             QMessageBox.information(self, "Import - SVG", f"SVG loading not implemented.\nWould load:\n{path}")
+
+    def compare_cmyk(self) -> None:
+        w = HSLCompareWidget()
+        w.setImage(self._render())
+        w.resize(800, 400)
+        w.setModal(True)
+        w.exec()
 
     def _create_toolbar(self) -> None:
         tb = QToolBar("Tools")
