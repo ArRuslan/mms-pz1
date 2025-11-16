@@ -276,14 +276,13 @@ class MainWindow(QMainWindow):
 
         old_sel = self.scene.selectedItems()
         self.scene.clearSelection()
-        old_item = self.prop.get_item()
         self.prop.set_item(None)
 
         self.scene.render(painter)
 
-        for item in old_sel:
+        for item in reversed(old_sel):
             item.setSelected(True)
-        self.prop.set_item(old_item)
+            self.prop.set_item(item)
 
         painter.end()
 
