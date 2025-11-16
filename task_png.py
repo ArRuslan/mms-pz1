@@ -5,7 +5,7 @@ import os
 import zlib
 from abc import abstractmethod, ABC
 from io import BytesIO
-from typing import BinaryIO, Self
+from typing import BinaryIO, Self, Literal
 
 kot_file_path = "/mnt/B0A0B30BA0B2D6D6/kot.PNG"
 
@@ -215,6 +215,221 @@ class Pixel:
 
     def __bytes__(self) -> bytes:
         return bytes([self.r, self.g, self.b])
+
+
+class PngLine:
+    def __init__(
+            self, filter_: Literal["none", "sub", "up", "avg", "paeth"], pixels: list[Pixel],
+            up_pixels: list[Pixel] | None,
+    ) -> None:
+        self.filter = filter_
+        self.pixels = pixels
+        self.up_pixels = up_pixels
+
+    def none(self) -> PngLine:
+        if self.filter == "none":
+            return PngLine("none", self.pixels.copy(), self.up_pixels)
+        elif self.filter == "sub":
+            pixels = self._decode_sub()
+        elif self.filter == "up":
+            pixels = self._decode_up()
+        elif self.filter == "avg":
+            pixels = self._decode_avg()
+        elif self.filter == "paeth":
+            pixels = self._decode_paeth()
+        else:
+            raise RuntimeError("Unreachable")
+
+        return PngLine("none", pixels, self.up_pixels)
+
+    def sub(self) -> PngLine:
+        if self.filter == "sub":
+            return PngLine("sub", self.pixels.copy(), self.up_pixels)
+
+        none = self.none()
+
+        out = []
+        for i, p in enumerate(none.pixels):
+            if i == 0:
+                out.append(Pixel(p.r, p.g, p.b))
+            else:
+                left = none.pixels[i - 1]
+                out.append(Pixel(p.r - left.r, p.g - left.g, p.b - left.b))
+
+        return PngLine("sub", out, self.up_pixels)
+
+    def _decode_sub(self) -> list[Pixel]:
+        out = []
+
+        for i, (dr, dg, db) in enumerate(self.pixels):
+            if i == 0:
+                out.append(Pixel(dr, dg, db))
+            else:
+                left = out[i - 1]
+                out.append(Pixel(
+                    (dr + left.r) & 0xFF,
+                    (dg + left.g) & 0xFF,
+                    (db + left.b) & 0xFF
+                ))
+
+        return out
+
+    def up(self) -> PngLine:
+        if self.filter == "up" or self.up_pixels is None:
+            return PngLine("up", self.pixels.copy(), self.up_pixels)
+
+        none = self.none()
+
+        out = []
+        for p, a in zip(none.pixels, none.up_pixels):
+            out.append(Pixel(p.r - a.r, p.g - a.g, p.b - a.b))
+
+        return PngLine("up", out, self.up_pixels)
+
+    def _decode_up(self) -> list[Pixel]:
+        out = []
+
+        if self.up_pixels is None:
+            return self.pixels.copy()
+
+        for (dr, dg, db), a in zip(self.pixels, self.up_pixels):
+            out.append(Pixel(
+                (dr + a.r) & 0xFF,
+                (dg + a.g) & 0xFF,
+                (db + a.b) & 0xFF
+            ))
+
+        return out
+
+    def avg(self) -> PngLine:
+        if self.filter == "avg":
+            return PngLine("avg", self.pixels.copy(), self.up_pixels)
+
+        none = self.none()
+
+        out = []
+        for x, p in enumerate(none.pixels):
+            if x == 0 and self.up_pixels is None:
+                avg = (0, 0, 0)
+            elif x == 0:
+                above = none.up_pixels[x]
+                avg = (above.r // 2, above.g // 2, above.b // 2)
+            elif self.up_pixels is None:
+                left = none.pixels[x - 1]
+                avg = (left.r // 2, left.g // 2, left.b // 2)
+            else:
+                left = none.pixels[x - 1]
+                above = self.up_pixels[x]
+                avg = ((left.r + above.r) // 2,
+                       (left.g + above.g) // 2,
+                       (left.b + above.b) // 2)
+            out.append(Pixel(p.r - avg[0], p.g - avg[1], p.b - avg[2]))
+
+        return PngLine("avg", out, self.up_pixels)
+
+    def _decode_avg(self) -> list[Pixel]:
+        out = []
+
+        for x, (dr, dg, db) in enumerate(self.pixels):
+            if x == 0 and self.up_pixels is None:
+                avg = (0, 0, 0)
+            elif x == 0:
+                above = self.up_pixels[x]
+                avg = (above.r // 2, above.g // 2, above.b // 2)
+            elif self.up_pixels is None:
+                left = out[x - 1]
+                avg = (left.r // 2, left.g // 2, left.b // 2)
+            else:
+                left = out[x - 1]
+                above = self.up_pixels[x]
+                avg = ((left.r + above.r) // 2,
+                       (left.g + above.g) // 2,
+                       (left.b + above.b) // 2)
+
+            out.append(Pixel(
+                (dr + avg[0]) & 0xFF,
+                (dg + avg[1]) & 0xFF,
+                (db + avg[2]) & 0xFF
+            ))
+
+        return out
+
+    @staticmethod
+    def _paeth_predictor(a: int, b: int, c: int) -> int:
+        p = a + b - c
+        pa = abs(p - a)
+        pb = abs(p - b)
+        pc = abs(p - c)
+        if pa <= pb and pa <= pc:
+            return a
+        elif pb <= pc:
+            return b
+        else:
+            return c
+
+    def paeth(self) -> PngLine:
+        if self.filter == "paeth" or self.up_pixels is None:
+            return PngLine("paeth", self.pixels.copy(), self.up_pixels)
+
+        none = self.none()
+
+        out = []
+        for x, p in enumerate(none.pixels):
+            if x == 0 and self.up_pixels is None:
+                pr = pg = pb = 0
+            elif x == 0:
+                a = self.up_pixels[x]
+                pr = a.r
+                pg = a.g
+                pb = a.b
+            elif self.up_pixels is None:
+                l = none.pixels[x - 1]
+                pr = l.r
+                pg = l.g
+                pb = l.b
+            else:
+                l = none.pixels[x - 1]
+                a = self.up_pixels[x]
+                ul = self.up_pixels[x - 1]
+                pr = self._paeth_predictor(l.r, a.r, ul.r)
+                pg = self._paeth_predictor(l.g, a.g, ul.g)
+                pb = self._paeth_predictor(l.b, a.b, ul.b)
+
+            out.append(Pixel(p.r - pr, p.g - pg, p.b - pb))
+
+        return PngLine("paeth", out, self.up_pixels)
+
+    def _decode_paeth(self) -> list[Pixel]:
+        out = []
+
+        for x, (dr, dg, db) in enumerate(self.pixels):
+            if x == 0 and self.up_pixels is None:
+                pr = pg = pb = 0
+            elif x == 0:
+                a = self.up_pixels[x]
+                pr = a.r
+                pg = a.g
+                pb = a.b
+            elif self.up_pixels is None:
+                l = out[x - 1]
+                pr = l.r
+                pg = l.g
+                pb = l.b
+            else:
+                l = out[x - 1]
+                a = self.up_pixels[x]
+                ul = self.up_pixels[x - 1]
+                pr = self._paeth_predictor(l.r, a.r, ul.r)
+                pg = self._paeth_predictor(l.g, a.g, ul.g)
+                pb = self._paeth_predictor(l.b, a.b, ul.b)
+
+            out.append(Pixel(
+                (dr + pr) & 0xFF,
+                (dg + pg) & 0xFF,
+                (db + pb) & 0xFF
+            ))
+
+        return out
 
 
 class PassThroughBytesIO(BytesIO):
