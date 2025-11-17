@@ -4,8 +4,9 @@ import math
 import os
 import zlib
 from abc import abstractmethod, ABC
+from enum import IntEnum
 from io import BytesIO
-from typing import BinaryIO, Self, Literal
+from typing import BinaryIO, Self
 
 kot_file_path = "/mnt/B0A0B30BA0B2D6D6/kot.PNG"
 
@@ -89,6 +90,14 @@ class PNGHeader(PNGChunk):
         )
 
 
+class PngFilter(IntEnum):
+    NONE = 0
+    SUB = 1
+    UP = 2
+    AVERAGE = 3
+    PAETH = 4
+
+
 class PNGData(PNGChunk):
     CHUNK_TYPE = "IDAT"
 
@@ -103,9 +112,24 @@ class PNGData(PNGChunk):
         compressed_data = BytesIO()
         dat_deflate = zlib.compressobj()
 
-        for row in pixels:
-            compressed_data.write(dat_deflate.compress(b"\x00"))
-            for col in row:
+        for idx, row in enumerate(pixels):
+            line = PngLine(PngFilter.NONE, row, pixels[idx - 1] if idx else None)
+
+            smallest_algo = None
+            smallest_pixels = None
+            smallest_size = float("inf")
+
+            for cline in (line.none(), line.sub(), line.up(), line.avg(), line.paeth()):
+                data = b"".join(bytes(px) for px in cline.pixels)
+                comp = zlib.compress(data)
+                if len(comp) >= smallest_size:
+                    continue
+                smallest_algo = cline.filter
+                smallest_pixels = cline.pixels
+                smallest_size = len(comp)
+
+            compressed_data.write(dat_deflate.compress(bytes([smallest_algo.value])))
+            for col in smallest_pixels:
                 compressed_data.write(dat_deflate.compress(bytes(col)))
 
         compressed_data.write(dat_deflate.flush())
@@ -219,7 +243,7 @@ class Pixel:
 
 class PngLine:
     def __init__(
-            self, filter_: Literal["none", "sub", "up", "avg", "paeth"], pixels: list[Pixel],
+            self, filter_: PngFilter, pixels: list[Pixel],
             up_pixels: list[Pixel] | None,
     ) -> None:
         self.filter = filter_
@@ -227,24 +251,24 @@ class PngLine:
         self.up_pixels = up_pixels
 
     def none(self) -> PngLine:
-        if self.filter == "none":
-            return PngLine("none", self.pixels.copy(), self.up_pixels)
-        elif self.filter == "sub":
+        if self.filter is PngFilter.NONE:
+            return PngLine(PngFilter.NONE, self.pixels.copy(), self.up_pixels)
+        elif self.filter is PngFilter.SUB:
             pixels = self._decode_sub()
-        elif self.filter == "up":
+        elif self.filter is PngFilter.UP:
             pixels = self._decode_up()
-        elif self.filter == "avg":
+        elif self.filter is PngFilter.AVERAGE:
             pixels = self._decode_avg()
-        elif self.filter == "paeth":
+        elif self.filter is PngFilter.PAETH:
             pixels = self._decode_paeth()
         else:
             raise RuntimeError("Unreachable")
 
-        return PngLine("none", pixels, self.up_pixels)
+        return PngLine(PngFilter.NONE, pixels, self.up_pixels)
 
     def sub(self) -> PngLine:
-        if self.filter == "sub":
-            return PngLine("sub", self.pixels.copy(), self.up_pixels)
+        if self.filter is PngFilter.SUB:
+            return PngLine(PngFilter.SUB, self.pixels.copy(), self.up_pixels)
 
         none = self.none()
 
@@ -254,9 +278,13 @@ class PngLine:
                 out.append(Pixel(p.r, p.g, p.b))
             else:
                 left = none.pixels[i - 1]
-                out.append(Pixel(p.r - left.r, p.g - left.g, p.b - left.b))
+                out.append(Pixel(
+                    (p.r - left.r) % 256,
+                    (p.g - left.g) % 256,
+                    (p.b - left.b) % 256,
+                ))
 
-        return PngLine("sub", out, self.up_pixels)
+        return PngLine(PngFilter.SUB, out, self.up_pixels)
 
     def _decode_sub(self) -> list[Pixel]:
         out = []
@@ -275,16 +303,20 @@ class PngLine:
         return out
 
     def up(self) -> PngLine:
-        if self.filter == "up" or self.up_pixels is None:
-            return PngLine("up", self.pixels.copy(), self.up_pixels)
+        if self.filter is PngFilter.UP or self.up_pixels is None:
+            return PngLine(PngFilter.UP, self.pixels.copy(), self.up_pixels)
 
         none = self.none()
 
         out = []
         for p, a in zip(none.pixels, none.up_pixels):
-            out.append(Pixel(p.r - a.r, p.g - a.g, p.b - a.b))
+            out.append(Pixel(
+                (p.r - a.r) % 256,
+                (p.g - a.g) % 256,
+                (p.b - a.b) % 256,
+            ))
 
-        return PngLine("up", out, self.up_pixels)
+        return PngLine(PngFilter.UP, out, self.up_pixels)
 
     def _decode_up(self) -> list[Pixel]:
         out = []
@@ -302,8 +334,8 @@ class PngLine:
         return out
 
     def avg(self) -> PngLine:
-        if self.filter == "avg":
-            return PngLine("avg", self.pixels.copy(), self.up_pixels)
+        if self.filter is PngFilter.AVERAGE:
+            return PngLine(PngFilter.AVERAGE, self.pixels.copy(), self.up_pixels)
 
         none = self.none()
 
@@ -323,9 +355,13 @@ class PngLine:
                 avg = ((left.r + above.r) // 2,
                        (left.g + above.g) // 2,
                        (left.b + above.b) // 2)
-            out.append(Pixel(p.r - avg[0], p.g - avg[1], p.b - avg[2]))
+            out.append(Pixel(
+                (p.r - avg[0]) % 256,
+                (p.g - avg[1]) % 256,
+                (p.b - avg[2]) % 256,
+            ))
 
-        return PngLine("avg", out, self.up_pixels)
+        return PngLine(PngFilter.AVERAGE, out, self.up_pixels)
 
     def _decode_avg(self) -> list[Pixel]:
         out = []
@@ -368,8 +404,8 @@ class PngLine:
             return c
 
     def paeth(self) -> PngLine:
-        if self.filter == "paeth" or self.up_pixels is None:
-            return PngLine("paeth", self.pixels.copy(), self.up_pixels)
+        if self.filter is PngFilter.PAETH or self.up_pixels is None:
+            return PngLine(PngFilter.PAETH, self.pixels.copy(), self.up_pixels)
 
         none = self.none()
 
@@ -395,9 +431,13 @@ class PngLine:
                 pg = self._paeth_predictor(l.g, a.g, ul.g)
                 pb = self._paeth_predictor(l.b, a.b, ul.b)
 
-            out.append(Pixel(p.r - pr, p.g - pg, p.b - pb))
+            out.append(Pixel(
+                (p.r - pr) % 256,
+                (p.g - pg) % 256,
+                (p.b - pb) % 256,
+            ))
 
-        return PngLine("paeth", out, self.up_pixels)
+        return PngLine(PngFilter.PAETH, out, self.up_pixels)
 
     def _decode_paeth(self) -> list[Pixel]:
         out = []
