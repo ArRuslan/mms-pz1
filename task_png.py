@@ -8,8 +8,6 @@ from enum import IntEnum
 from io import BytesIO
 from typing import BinaryIO, Self
 
-kot_file_path = "/mnt/B0A0B30BA0B2D6D6/kot.PNG"
-
 
 class PNGChunk(ABC):
     CHUNK_TYPE: str
@@ -682,8 +680,6 @@ class Image:
 
 
 def main() -> None:
-    #read_png(kot_file_path)
-
     img = Image(512, 512)
     img.add_object(ImageEllipse(100, 100, 50, 25, (255, 0, 0), (0, 255, 0), rotation_deg=45))
     img.add_object(ImageCircle(100, 100, 30, (255, 0, 255), (0, 0, 255), 5))

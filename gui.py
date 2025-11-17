@@ -43,27 +43,25 @@ def parse_style_attribute(style: str) -> dict:
     return out
 
 
-_TRANSFORM_RE = re.compile(r'(?P<type>\w+)\s*\(\s*(?P<args>[^)]+)\)')
+_TRANSFORM_RE2 = re.compile(r'(\w+)\s*\(([^)]*)\)')
 
-def parse_transform(transform: str) -> tuple[float, float, float]:
-    tx = 0.0
-    ty = 0.0
-    rot = 0.0
+
+def parse_transform(transform: str) -> tuple[int, int, int, int, int]:
+    tx = ty = rot = 0
+    rcx = rcy = 0
     if not transform:
-        return tx, ty, rot
-    for m in _TRANSFORM_RE.finditer(transform):
-        ttype = m.group("type")
-        args = m.group("args").replace(",", " ")
-        nums = [float(x) for x in args.split() if x.strip()]
+        return tx, ty, rot, rcx, rcy
+    for ttype, args in _TRANSFORM_RE2.findall(transform):
+        nums = [float(x) for x in re.split(r'[ ,]+', args.strip()) if x]
         if ttype == "translate":
-            if len(nums) >= 1:
-                tx = nums[0]
-            if len(nums) >= 2:
-                ty = nums[1]
+            if len(nums) >= 1: tx = nums[0]
+            if len(nums) >= 2: ty = nums[1]
         elif ttype == "rotate":
-            if len(nums) >= 1:
+            if len(nums) == 1:
                 rot = nums[0]
-    return tx, ty, rot
+            elif len(nums) >= 3:
+                rot, rcx, rcy = nums[0], nums[1], nums[2]
+    return tx, ty, rot, rcx, rcy
 
 
 def parse_color(s: str) -> QColor | None:
@@ -94,7 +92,9 @@ def _rect_item_to_svg(item: QGraphicsRectItem) -> ET.Element:
     rot = item.rotation()
     transform = f"translate({x} {y})"
     if rot:
-        transform += f" rotate({rot})"
+        cx = item.transformOriginPoint().x()
+        cy = item.transformOriginPoint().y()
+        transform += f" rotate({rot} {cx} {cy})"
     elem = ET.Element("rect", {
         "x": '0',
         "y": '0',
@@ -126,7 +126,9 @@ def _ellipse_item_to_svg(item: QGraphicsEllipseItem) -> ET.Element:
     rot = item.rotation()
     transform = f"translate({x} {y})"
     if rot:
-        transform += f" rotate({rot})"
+        cx = item.transformOriginPoint().x()
+        cy = item.transformOriginPoint().y()
+        transform += f" rotate({rot} {cx} {cy})"
     elem = ET.Element("ellipse", {
         "cx": str(cx),
         "cy": str(cy),
@@ -152,7 +154,9 @@ def _line_item_to_svg(item: QGraphicsLineItem) -> ET.Element:
     rot = item.rotation()
     transform = f"translate({tx} {ty})"
     if rot:
-        transform += f" rotate({rot})"
+        cx = item.transformOriginPoint().x()
+        cy = item.transformOriginPoint().y()
+        transform += f" rotate({rot} {cx} {cy})"
     elem = ET.Element("line", {
         "x1": str(x1),
         "y1": str(y1),
@@ -190,6 +194,7 @@ class ShapeFactory:
             QGraphicsRectItem.GraphicsItemFlag.ItemIsMovable |
             QGraphicsRectItem.GraphicsItemFlag.ItemSendsGeometryChanges
         )
+        r.setTransformOriginPoint(w / 2, h / 2)
         return r
 
     @staticmethod
@@ -208,6 +213,7 @@ class ShapeFactory:
             QGraphicsEllipseItem.GraphicsItemFlag.ItemIsMovable |
             QGraphicsEllipseItem.GraphicsItemFlag.ItemSendsGeometryChanges
         )
+        e.setTransformOriginPoint(w / 2, h / 2)
         return e
 
     @staticmethod
@@ -227,6 +233,7 @@ class ShapeFactory:
             QGraphicsLineItem.GraphicsItemFlag.ItemIsMovable |
             QGraphicsLineItem.GraphicsItemFlag.ItemSendsGeometryChanges
         )
+        l.setTransformOriginPoint(0, 0)
         return l
 
 
@@ -294,6 +301,16 @@ class PropertyEditor(QWidget):
         self.lum_slider.valueChanged.connect(self._on_lum_changed)
         layout.addRow("Lum:", self.lum_slider)
 
+        self.spin_rcx = QSpinBox()
+        self.spin_rcx.setRange(-10000, 10000)
+        self.spin_rcx.valueChanged.connect(self._on_rot_center)
+        layout.addRow("Rot Center X:", self.spin_rcx)
+
+        self.spin_rcy = QSpinBox()
+        self.spin_rcy.setRange(-10000, 10000)
+        self.spin_rcy.valueChanged.connect(self._on_rot_center)
+        layout.addRow("Rot Center Y:", self.spin_rcy)
+
     def set_item(self, item: QGraphicsItem | None) -> None:
         self._item = item
         self._update_ui()
@@ -341,6 +358,10 @@ class PropertyEditor(QWidget):
             h, s, l, *_ = self._item.pen().color().getHsl()
             self.sat_slider.setValue(s)
             self.lum_slider.setValue(l)
+
+        origin = self._item.transformOriginPoint()
+        self.spin_rcx.setValue(int(origin.x()))
+        self.spin_rcy.setValue(int(origin.y()))
 
         self._lock = False
 
@@ -413,6 +434,13 @@ class PropertyEditor(QWidget):
             h, s, _, *_ = self._item.pen().color().getHsl()
             new_color = QColor.fromHsl(h, s, self.lum_slider.value())
             self._item.setPen(QPen(new_color))
+
+    def _on_rot_center(self):
+        if self._lock or self._item is None:
+            return
+        cx = self.spin_rcx.value()
+        cy = self.spin_rcy.value()
+        self._item.setTransformOriginPoint(cx, cy)
 
 
 class HSLCompareWidget(QDialog):
@@ -634,7 +662,7 @@ class MainWindow(QMainWindow):
                 style_map['stroke-width'] = elem.attrib.get("stroke-width")
 
             transform = elem.attrib.get("transform", "")
-            tx, ty, rot = parse_transform(transform)
+            tx, ty, rot, rcx, rcy = parse_transform(transform)
 
             if tag == "rect":
                 x_attr = elem.attrib.get("x", "0")
@@ -657,6 +685,7 @@ class MainWindow(QMainWindow):
                 item = ShapeFactory.rect(final_x, final_y, w, h, fill=fill, stroke=stroke, sw=sw)
                 if rot:
                     item.setRotation(rot)
+                    item.setTransformOriginPoint(rcx, rcy)
                 self.scene.addItem(item)
 
             elif tag == "ellipse":
@@ -698,6 +727,7 @@ class MainWindow(QMainWindow):
                 item = ShapeFactory.ellipse(final_x, final_y, w, h, fill=fill, stroke=stroke, sw=sw)
                 if rot:
                     item.setRotation(rot)
+                    item.setTransformOriginPoint(rcx, rcy)
                 self.scene.addItem(item)
 
             elif tag == "line":
@@ -722,6 +752,7 @@ class MainWindow(QMainWindow):
                 item = ShapeFactory.line(tx + x1, ty + y1, tx + x1 + dx, ty + y1 + dy, stroke=pen_color, sw=sw)
                 if rot:
                     item.setRotation(rot)
+                    item.setTransformOriginPoint(rcx, rcy)
                 self.scene.addItem(item)
 
     def compare_cmyk(self) -> None:
