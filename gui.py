@@ -1,5 +1,7 @@
+import re
 import signal
 import sys
+import xml.etree.ElementTree as ET
 
 from PySide6.QtCore import Qt, QEvent, QObject, QPointF
 from PySide6.QtGui import QPainter, QPen, QBrush, QColor, QActionGroup, QAction, QSinglePointEvent, QImage, \
@@ -13,6 +15,153 @@ from task_png import Image, Pixel, write_png
 DEFAULT_FILL = QColor(200, 200, 255)
 DEFAULT_STROKE = QColor(30, 30, 30)
 DEFAULT_STROKE_WIDTH = 2
+
+
+def qcolor_to_hex(col: QColor) -> str:
+    if not isinstance(col, QColor):
+        return "#000000"
+    return col.name()
+
+
+_STYLE_SPLIT_RE = re.compile(r'\s*;\s*')
+_STYLE_KV_RE = re.compile(r'\s*([^:]+)\s*:\s*(.+)\s*')
+
+
+def parse_style_attribute(style: str) -> dict:
+    out = {}
+    if not style:
+        return out
+    for part in _STYLE_SPLIT_RE.split(style.strip()):
+        if not part:
+            continue
+        m = _STYLE_KV_RE.match(part)
+        if not m:
+            continue
+        key = m.group(1).strip()
+        val = m.group(2).strip()
+        out[key] = val
+    return out
+
+
+_TRANSFORM_RE = re.compile(r'(?P<type>\w+)\s*\(\s*(?P<args>[^)]+)\)')
+
+def parse_transform(transform: str) -> tuple[float, float, float]:
+    tx = 0.0
+    ty = 0.0
+    rot = 0.0
+    if not transform:
+        return tx, ty, rot
+    for m in _TRANSFORM_RE.finditer(transform):
+        ttype = m.group("type")
+        args = m.group("args").replace(",", " ")
+        nums = [float(x) for x in args.split() if x.strip()]
+        if ttype == "translate":
+            if len(nums) >= 1:
+                tx = nums[0]
+            if len(nums) >= 2:
+                ty = nums[1]
+        elif ttype == "rotate":
+            if len(nums) >= 1:
+                rot = nums[0]
+    return tx, ty, rot
+
+
+def parse_color(s: str) -> QColor | None:
+    if not s:
+        return None
+    s = s.strip()
+    if s == "none":
+        return None
+    try:
+        return QColor(s)
+    except:
+        return None
+
+
+def _rect_item_to_svg(item: QGraphicsRectItem) -> ET.Element:
+    r = item.rect()
+    x = item.pos().x()
+    y = item.pos().y()
+    w = r.width()
+    h = r.height()
+    if item.brush() and item.brush().style() != Qt.BrushStyle.NoBrush:
+        fill = qcolor_to_hex(item.brush().color())
+    else:
+        fill = "none"
+    pen = item.pen()
+    stroke = qcolor_to_hex(pen.color()) if pen else "none"
+    stroke_w = str(pen.width()) if pen else "1"
+    rot = item.rotation()
+    transform = f"translate({x} {y})"
+    if rot:
+        transform += f" rotate({rot})"
+    elem = ET.Element("rect", {
+        "x": '0',
+        "y": '0',
+        "width": str(w),
+        "height": str(h),
+        "transform": transform,
+        "style": f"fill:{fill};stroke:{stroke};stroke-width:{stroke_w}"
+    })
+    return elem
+
+
+def _ellipse_item_to_svg(item: QGraphicsEllipseItem) -> ET.Element:
+    r = item.rect()
+    x = item.pos().x()
+    y = item.pos().y()
+    w = r.width()
+    h = r.height()
+    cx = w / 2.0
+    cy = h / 2.0
+    rx = w / 2.0
+    ry = h / 2.0
+    if item.brush() and item.brush().style() != Qt.BrushStyle.NoBrush:
+        fill = qcolor_to_hex(item.brush().color())
+    else:
+        fill = "none"
+    pen = item.pen()
+    stroke = qcolor_to_hex(pen.color()) if pen else "none"
+    stroke_w = str(pen.width()) if pen else "1"
+    rot = item.rotation()
+    transform = f"translate({x} {y})"
+    if rot:
+        transform += f" rotate({rot})"
+    elem = ET.Element("ellipse", {
+        "cx": str(cx),
+        "cy": str(cy),
+        "rx": str(rx),
+        "ry": str(ry),
+        "transform": transform,
+        "style": f"fill:{fill};stroke:{stroke};stroke-width:{stroke_w}"
+    })
+    return elem
+
+
+def _line_item_to_svg(item: QGraphicsLineItem) -> ET.Element:
+    line = item.line()
+    x1 = line.x1()
+    y1 = line.y1()
+    x2 = line.x2()
+    y2 = line.y2()
+    tx = item.pos().x()
+    ty = item.pos().y()
+    pen = item.pen()
+    stroke = qcolor_to_hex(pen.color()) if pen else "none"
+    stroke_w = str(pen.width()) if pen else "1"
+    rot = item.rotation()
+    transform = f"translate({tx} {ty})"
+    if rot:
+        transform += f" rotate({rot})"
+    elem = ET.Element("line", {
+        "x1": str(x1),
+        "y1": str(y1),
+        "x2": str(x2),
+        "y2": str(y2),
+        "transform": transform,
+        "style": f"stroke:{stroke};stroke-width:{stroke_w}"
+    })
+    return elem
 
 
 class CanvasView(QGraphicsView):
@@ -405,13 +554,175 @@ class MainWindow(QMainWindow):
 
     def export_svg(self) -> None:
         path, _ = QFileDialog.getSaveFileName(self, "Export SVG", "", "SVG Files (*.svg)")
-        if path:
-            QMessageBox.information(self, "Export - SVG", f"SVG export not implemented.\nWould save to:\n{path}")
+        if not path:
+            return
+        try:
+            svg_text = self._scene_to_svg_text()
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(svg_text)
+            QMessageBox.information(self, "Export SVG", f"Exported SVG to:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Export Error", f"Failed to export SVG:\n{e}")
 
-    def load_svg(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Load SVG", "", "SVG Files (*.svg)")
-        if path:
-            QMessageBox.information(self, "Import - SVG", f"SVG loading not implemented.\nWould load:\n{path}")
+    def _scene_to_svg_text(self) -> str:
+        rect = self.scene.sceneRect()
+        width = int(rect.width())
+        height = int(rect.height())
+        svg = ET.Element("svg", {
+            "xmlns": "http://www.w3.org/2000/svg",
+            "version": "1.1",
+            "width": str(width),
+            "height": str(height),
+            "viewBox": f"0 0 {width} {height}",
+        })
+        for item in self.scene.items():
+            if isinstance(item, QGraphicsRectItem):
+                elem = _rect_item_to_svg(item)
+                svg.append(elem)
+            elif isinstance(item, QGraphicsEllipseItem):
+                elem = _ellipse_item_to_svg(item)
+                svg.append(elem)
+            elif isinstance(item, QGraphicsLineItem):
+                elem = _line_item_to_svg(item)
+                svg.append(elem)
+            else:
+                continue
+
+        data = ET.tostring(svg, encoding='unicode')
+        return f"<?xml version=\"1.0\" encoding=\"utf-8\"?>\n{data}"
+
+    def load_svg(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Load SVG", "", "SVG Files (*.svg *.xml)")
+        if not path:
+            return
+        try:
+            self._load_svg_from_file(path)
+            QMessageBox.information(self, "Load SVG", f"Loaded SVG from:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Load Error", f"Failed to load SVG:\n{e}")
+
+    def _load_svg_from_file(self, path: str):
+        tree = ET.parse(path)
+        root = tree.getroot()
+        if self.scene.items():
+            res = QMessageBox.question(
+                self, "Load SVG", "Clear current scene and load SVG?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if res != QMessageBox.StandardButton.Yes:
+                return
+            self.scene.clear()
+
+        def local_tag(tag_: str):
+            if "}" in tag_:
+                return tag_.split("}", 1)[1]
+            return tag_
+
+        for elem in root.iter():
+            tag = local_tag(elem.tag)
+            if tag not in ("rect", "ellipse", "line"):
+                continue
+            style_map = {}
+            style_attr = elem.attrib.get("style", "")
+            if style_attr:
+                style_map = parse_style_attribute(style_attr)
+            if "fill" in elem.attrib:
+                style_map["fill"] = elem.attrib.get("fill")
+            if "stroke" in elem.attrib:
+                style_map["stroke"] = elem.attrib.get("stroke")
+            if "stroke-width" in elem.attrib:
+                style_map['stroke-width'] = elem.attrib.get("stroke-width")
+
+            transform = elem.attrib.get("transform", "")
+            tx, ty, rot = parse_transform(transform)
+
+            if tag == "rect":
+                x_attr = elem.attrib.get("x", "0")
+                y_attr = elem.attrib.get("y", "0")
+                w_attr = elem.attrib.get("width", "0")
+                h_attr = elem.attrib.get("height", "0")
+                try:
+                    x0 = float(x_attr)
+                    y0 = float(y_attr)
+                    w = int(float(w_attr))
+                    h = int(float(h_attr))
+                except Exception as e:
+                    print(e)
+                    continue
+                final_x = int(tx + x0)
+                final_y = int(ty + y0)
+                fill = parse_color(style_map.get("fill", "").strip()) or DEFAULT_FILL
+                stroke = parse_color(style_map.get("stroke", "").strip()) or DEFAULT_STROKE
+                sw = int(float(style_map.get("stroke-width", str(DEFAULT_STROKE_WIDTH))))
+                item = ShapeFactory.rect(final_x, final_y, w, h, fill=fill, stroke=stroke, sw=sw)
+                if rot:
+                    item.setRotation(rot)
+                self.scene.addItem(item)
+
+            elif tag == "ellipse":
+                cx_attr = elem.attrib.get("cx")
+                cy_attr = elem.attrib.get("cy")
+                rx_attr = elem.attrib.get("rx")
+                ry_attr = elem.attrib.get("ry")
+                if cx_attr and rx_attr:
+                    try:
+                        cx = float(cx_attr)
+                        cy = float(cy_attr)
+                        rx = float(rx_attr)
+                        ry = float(ry_attr)
+                        w = rx * 2.0
+                        h = ry * 2.0
+                        local_x = cx - rx
+                        local_y = cy - ry
+                        final_x = tx + local_x
+                        final_y = ty + local_y
+                    except Exception as e:
+                        print(e)
+                        continue
+                else:
+                    try:
+                        w = float(elem.attrib.get("width", "0"))
+                        h = float(elem.attrib.get("height", "0"))
+                        final_x = tx + float(elem.attrib.get("x", "0"))
+                        final_y = ty + float(elem.attrib.get("y", "0"))
+                    except Exception as e:
+                        print(e)
+                        continue
+                w = int(w)
+                h = int(h)
+                final_x = int(final_x)
+                final_y = int(final_y)
+                fill = parse_color(style_map.get("fill", "").strip()) or DEFAULT_FILL
+                stroke = parse_color(style_map.get("stroke", "").strip()) or DEFAULT_STROKE
+                sw = int(float(style_map.get("stroke-width", str(DEFAULT_STROKE_WIDTH))))
+                item = ShapeFactory.ellipse(final_x, final_y, w, h, fill=fill, stroke=stroke, sw=sw)
+                if rot:
+                    item.setRotation(rot)
+                self.scene.addItem(item)
+
+            elif tag == "line":
+                try:
+                    x1 = float(elem.attrib.get("x1", "0"))
+                    y1 = float(elem.attrib.get("y1", "0"))
+                    x2 = float(elem.attrib.get("x2", "0"))
+                    y2 = float(elem.attrib.get("y2", "0"))
+                except Exception as e:
+                    print(e)
+                    continue
+                pen_color = parse_color(style_map.get("stroke", "").strip()) or DEFAULT_STROKE
+                sw = int(float(style_map.get("stroke-width", str(DEFAULT_STROKE_WIDTH))))
+                dx = x2 - x1
+                dy = y2 - y1
+                tx = int(tx)
+                ty = int(ty)
+                x1 = int(x1)
+                y1 = int(y1)
+                dx = int(dx)
+                dy = int(dy)
+                item = ShapeFactory.line(tx + x1, ty + y1, tx + x1 + dx, ty + y1 + dy, stroke=pen_color, sw=sw)
+                if rot:
+                    item.setRotation(rot)
+                self.scene.addItem(item)
 
     def compare_cmyk(self) -> None:
         w = HSLCompareWidget()
